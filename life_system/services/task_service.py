@@ -1,6 +1,8 @@
 from typing import List, Optional
 import os
+from datetime import datetime, timedelta
 from sqlalchemy.orm import Session
+from sqlalchemy import desc
 from life_system.core.event_bus import EventBus
 from life_system.core.models import Task, Event
 from life_system.core.db import SessionLocal
@@ -31,6 +33,13 @@ class TaskService:
         count = 0
         try:
             for event in events:
+                # 检查该事件是否在其他地方已经被处理（防止并发问题）
+                # 注意：这里我们使用 update 语句的行级锁特性或者条件更新来确保安全
+                # 但为了简单起见，我们假设 get_unprocessed 已经尽力了。
+                
+                # 为了防止"DetachedInstanceError"，我们直接使用 event 对象的数据（它们应该在内存中了）
+                # 状态更新则通过显式的 SQL UPDATE 语句执行，确保万无一失。
+                
                 task_created = False
                 # 处理 CLI 手动任务
                 if event.type == "task.created":
@@ -43,27 +52,46 @@ class TaskService:
                 
                 # 处理文件监控事件
                 elif event.type.startswith("file."):
-                    # 这里是 MVP 的简单逻辑：直接把“文件变动”变成一个任务
-                    # 未来这里应该调用 AI Engine 进行分析
                     path = event.payload.get("path")
                     event_type = event.type.split(".")[1] # created, modified
                     if path:
-                        # 简单的防噪：只关注 .md, .txt, .py 文件
                         if any(path.endswith(ext) for ext in ['.md', '.txt', '.py']):
                             title = f"[{event_type.upper()}] 审查文件: {os.path.basename(path)}"
-                            # 避免重复创建同名任务（简单去重）
-                            exists = db.query(Task).filter(Task.title == title, Task.status == "pending").first()
-                            if not exists:
-                                new_task = Task(title=title, status="pending")
-                                db.add(new_task)
-                                task_created = True
-                                console.print(f"[cyan]自动发现: {title}[/cyan]")
-                                logger.info(f"Auto-generated task from file event: {title}")
-                            else:
-                                logger.debug(f"Skipped duplicate task for file: {path}")
+                            
+                            # === 智能去重策略 ===
+                            # 1. 检查是否有 PENDING 的同名任务 -> 直接跳过
+                            pending_task = db.query(Task).filter(
+                                Task.title == title, 
+                                Task.status == "pending"
+                            ).first()
+                            
+                            if pending_task:
+                                logger.debug(f"Skipped duplicate task (already pending): {title}")
+                                db.query(Event).filter(Event.id == event.id).update({"processed": True})
+                                continue
+                                
+                            # 2. 检查是否有最近完成 (DONE) 的同名任务 -> 防止"诈尸"
+                            cutoff_time = datetime.now() - timedelta(minutes=5)
+                            recent_done_task = db.query(Task).filter(
+                                Task.title == title,
+                                Task.status == "done",
+                                Task.updated_at > cutoff_time
+                            ).order_by(desc(Task.updated_at)).first()
+                            
+                            if recent_done_task:
+                                logger.info(f"Skipped recent done task (cool-down active): {title} (Done at {recent_done_task.updated_at})")
+                                db.query(Event).filter(Event.id == event.id).update({"processed": True})
+                                continue
 
-                # 标记事件为已处理
-                event.processed = True
+                            # 只有既没有 pending，又没有最近 done 的任务，才创建新的
+                            new_task = Task(title=title, status="pending")
+                            db.add(new_task)
+                            task_created = True
+                            console.print(f"[cyan]自动发现: {title}[/cyan]")
+                            logger.info(f"Auto-generated task from file event: {title}")
+
+                # 标记事件为已处理 (使用显式 UPDATE)
+                db.query(Event).filter(Event.id == event.id).update({"processed": True})
                 count += 1
                 
             db.commit()
@@ -93,7 +121,10 @@ class TaskService:
             if task:
                 task.status = new_status
                 db.commit()
+                # 记录状态变更日志
+                logger.info(f"Task {task_id} status updated to {new_status}")
                 return True
+            logger.warning(f"Task {task_id} not found when updating status to {new_status}")
             return False
         finally:
             db.close()

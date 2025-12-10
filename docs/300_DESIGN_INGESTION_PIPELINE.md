@@ -70,12 +70,19 @@ Collector -> Ingestion Pipeline (不动点) -> EventBus -> Service
 ```
 
 ### 4. 去重 (Deduplication)
-**问题**：完全相同的事件可能被多次发布
+**问题**：完全相同的事件可能被多次发布，或者 Watchdog 重复报告从未变过的文件。
 
 **解决方案**：
-- 计算事件的 MD5 哈希
-- 维护已处理事件的哈希集合
-- 相同哈希的事件直接丢弃
+1.  **哈希去重**：计算事件内容（排除时间戳）的 MD5 哈希，内存去重。
+2.  **物理状态持久化 (Physical State Persistence)**：
+    -   针对文件事件，维护 `Path -> (mtime, size)` 的状态映射。
+    -   即使收到 `file.modified` 事件，如果文件的物理元数据（修改时间、大小）与上次记录一致，则视为**假阳性 (False Positive)** 或噪音，直接丢弃。
+    -   这是比防抖更底层的去重，确保只有**真实**的物理变化才会触发系统反应。
+
+**去重逻辑流**：
+```
+Event -> Filter? (Pass) -> Normalize -> Physical State Changed? (Yes) -> Hash Unique? (Yes) -> Debounce? (Pass) -> Publish
+```
 
 ## 使用方式
 

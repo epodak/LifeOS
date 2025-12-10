@@ -65,9 +65,21 @@ def add(
     event_id = service.create_task_event(title)
     console.print(f"[green]Task event published (ID: {event_id}). Run 'process' to apply.[/green]")
 
-@app.command()
-def process():
-    """手动触发事件处理（将事件转换为任务）"""
+@app.command(context_settings={"allow_extra_args": True, "ignore_unknown_options": True})
+def process(ctx: typer.Context):
+    """
+    手动触发事件处理（将事件转换为任务）。
+    
+    注意：此命令不需要参数。它会自动处理所有积压的系统事件（如文件变动）。
+    如果要完成任务，请使用 'life done <ID>'。
+    """
+    if ctx.args:
+        console.print(f"[yellow]提示: 'process' 命令不需要参数 (你输入了: {' '.join(ctx.args)})。[/yellow]")
+        console.print("[yellow]它的作用是将后台事件（如文件变动）转化为任务。[/yellow]")
+        console.print("[cyan]如果你想完成任务，请使用: life done <ID>[/cyan]")
+        console.print("[cyan]如果你想放弃任务，请使用: life drop <ID>[/cyan]")
+        return
+
     count = service.process_events()
     console.print(f"[green]Processed {count} events.[/green]")
 

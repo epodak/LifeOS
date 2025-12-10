@@ -1,21 +1,11 @@
-"""
-事件摄入管道 (Event Ingestion Pipeline)
-这是系统的"不动点"：所有外部输入（CLI、文件监控、定时触发）都必须经过这个管道
-才能进入 EventBus，确保系统的稳定性和一致性。
-
-职责：
-1. 防抖 (Debounce)：同一路径/资源在时间窗口内的多次事件，只保留最后一个
-2. 过滤 (Filter)：忽略无关文件（.git, __pycache__, 临时文件等）
-3. 标准化 (Normalize)：统一事件格式，无论来源
-4. 去重 (Deduplication)：避免重复事件
-"""
-from datetime import datetime, timedelta
-from typing import Dict, Any, Optional, Set
-from pathlib import Path
-import hashlib
 import json
 from collections import defaultdict
 from threading import Lock
+from typing import Dict, Any, Optional, Set
+from datetime import datetime, timedelta
+from pathlib import Path
+import hashlib
+import os
 from life_system.utils.logger import logger
 
 class IngestionPipeline:
@@ -23,6 +13,12 @@ class IngestionPipeline:
     事件摄入管道：系统的"不动点"
     
     所有 Collector 都应该通过这个管道发布事件，而不是直接调用 EventBus。
+    
+    持久化去重机制：
+    为了防止重启后重新生成事件，Pipeline 现在在内存中维护了一个
+    (path -> (mtime, size)) 的状态映射。
+    注意：目前的持久化仅限于进程生命周期。如果需要重启后依然去重，
+    需要将 _file_state_cache 序列化到磁盘（MVP暂不实现，靠 Service 层的 Pending 检查兜底）。
     """
     
     # 需要过滤的文件/目录模式
@@ -40,7 +36,9 @@ class IngestionPipeline:
         # Node
         'node_modules', '.npm',
         # 其他
-        '.env.local', '.env.*.local'
+        '.env.local', '.env.*.local',
+        # 显式忽略数据库文件，防止死循环
+        'life.db', 'life.db-journal', '*.lock'
     }
     
     def __init__(self, debounce_window: float = 1.0):
@@ -53,8 +51,20 @@ class IngestionPipeline:
         self.debounce_window = debounce_window
         self._event_cache: Dict[str, tuple] = {}  # key: event_key, value: (timestamp, event_data)
         self._seen_hashes: Set[str] = set()  # 已处理的事件哈希（用于去重）
+        self._file_state_cache: Dict[str, tuple] = {} # key: path, value: (mtime, size)
         self._lock = Lock()  # 线程安全
         
+    def _get_file_state(self, path_str: str) -> Optional[tuple]:
+        """获取文件的物理状态 (mtime, size)"""
+        try:
+            p = Path(path_str)
+            if p.exists() and p.is_file():
+                stat = p.stat()
+                return (stat.st_mtime, stat.st_size)
+        except Exception:
+            pass
+        return None
+
     def _generate_event_key(self, event_type: str, source: str, payload: Dict[str, Any]) -> str:
         """
         生成事件的唯一键，用于防抖
@@ -75,12 +85,18 @@ class IngestionPipeline:
         """
         生成事件的哈希值，用于去重
         
-        完全相同的 payload 应该被去重
+        完全相同的 payload 应该被去重。
+        注意：排除 timestamp 字段，确保同一事件在不同时间被视为重复（如果内容没变）。
         """
+        # 复制 payload 并移除时间戳，只根据内容去重
+        clean_payload = payload.copy()
+        if 'timestamp' in clean_payload:
+            del clean_payload['timestamp']
+            
         content = json.dumps({
             'type': event_type,
             'source': source,
-            'payload': payload
+            'payload': clean_payload
         }, sort_keys=True)
         return hashlib.md5(content.encode()).hexdigest()
     
@@ -157,6 +173,11 @@ class IngestionPipeline:
         if 'timestamp' not in normalized:
             normalized['timestamp'] = datetime.now().isoformat()
         
+        # 移除可能导致哈希变动的易变字段（如 timestamp），如果它不是 payload 的核心部分
+        # 但对于文件事件，timestamp 是有意义的... 
+        # 关键是：我们希望 payload 相同（内容相同）时去重，但 timestamp 每次都变。
+        # 所以计算哈希时，应该排除 timestamp？
+        
         return normalized
     
     def ingest(
@@ -186,6 +207,25 @@ class IngestionPipeline:
             
             # 2. 标准化：统一格式
             normalized_payload = self._normalize_payload(event_type, source, payload)
+            
+            # === 3. 物理状态检查 (Physical State Check) ===
+            # 这是为了防止 Watchdog 重复报告从未变过的文件
+            if event_type.startswith('file.'):
+                path = normalized_payload.get('path')
+                if path:
+                    current_state = self._get_file_state(path)
+                    if current_state:
+                        last_state = self._file_state_cache.get(path)
+                        if last_state == current_state:
+                            # 物理状态没变，视为重复/噪音
+                            logger.debug(f"File state unchanged (duplicate event): {path}")
+                            return None
+                        # 更新状态缓存
+                        self._file_state_cache[path] = current_state
+                    else:
+                        # 文件可能已被删除
+                        if 'deleted' not in event_type:
+                            return None
             
             # 3. 去重：检查是否已经处理过完全相同的事件
             event_hash = self._generate_event_hash(event_type, source, normalized_payload)
@@ -241,4 +281,5 @@ class IngestionPipeline:
         with self._lock:
             self._event_cache.clear()
             self._seen_hashes.clear()
+            self._file_state_cache.clear()
             logger.info("Pipeline reset")
