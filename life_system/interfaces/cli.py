@@ -13,18 +13,49 @@ app = typer.Typer(
 service = TaskService()
 
 @app.command()
-def init():
-    """初始化数据库"""
+def init(
+    force: bool = typer.Option(False, "--force", "-f", help="强制删除现有数据库并重新初始化")
+):
+    """
+    初始化数据库。
+    使用 --force/-f 参数可删除现有数据重新开始。
+    """
+    if force:
+        if safe_confirm("[bold red]警告：这将永久删除所有现有数据！确定要继续吗？[/bold red]", default=False):
+            try:
+                # 尝试删除数据库文件
+                from life_system.config.settings import DB_PATH
+                if DB_PATH.exists():
+                    DB_PATH.unlink()
+                    console.print(f"[yellow]已删除旧数据库: {DB_PATH}[/yellow]")
+            except Exception as e:
+                console.print(f"[red]删除失败: {e}[/red]")
+                return
+
     if safe_confirm("确定要初始化数据库吗？这不会删除现有数据，但会创建缺失的表。"):
         init_db()
         console.print("[green]Database initialized![/green]")
 
 @app.command()
-def add(title: str = typer.Argument(None, help="任务标题")):
+def add(
+    title: str = typer.Argument(None, help="任务标题"),
+    gui: bool = typer.Option(False, "--gui", "-g", help="使用 GUI 添加任务")
+):
     """
     添加新任务。
     如果不提供标题，将进入交互式模式。
+    支持 -g 启动专用的添加任务 GUI。
     """
+    if gui:
+        import sys
+        import subprocess
+        from pathlib import Path
+        # 调用专用的 add_gui.py (假设我们拆分了 GUI)
+        # 或者调用 gui.py 并传递特定参数让其只显示 add 界面
+        gui_script = Path(__file__).parent / "gui.py"
+        subprocess.Popen([sys.executable, str(gui_script), "add"])
+        return
+
     if not title:
         title = smart_prompt("请输入任务标题")
     

@@ -30,23 +30,21 @@
 
 ### 场景 A：手动添加 (当前)
 ```mermaid
-[用户] --(life add)--> [CLI进程] --(写入)--> [DB (Events表)]
-                                           ^
-                                           | (轮询)
-                                    [后台 serve 进程] --(读取/处理)--> [DB (Tasks表)]
+graph TD
+    User[用户] -- "life add" --> CLI[CLI进程]
+    CLI -- "写入" --> DB_Events["DB (Events表)"]
+    Serve["后台 serve 进程"] -- "轮询" --> DB_Events
+    Serve -- "读取/处理" --> DB_Tasks["DB (Tasks表)"]
 ```
 
 ### 场景 B：文件自动感知 (理想目标)
 ```mermaid
-[VSCode/文件管理器] --(新建文件)--> [文件系统]
-                                      |
-                                  (Watchdog 监听)
-                                      v
-                               [后台 serve 进程 (Collector)] --(内部生成事件)--> [DB (Events表)]
-                                      |
-                                  (EventBus 分发)
-                                      v
-                               [Service (处理逻辑)] --(生成任务)--> [DB (Tasks表)]
+graph TD
+    Editor["VSCode/文件管理器"] -- "新建文件" --> FS[文件系统]
+    FS -- "Watchdog 监听" --> Collector["后台 serve 进程 (Collector)"]
+    Collector -- "内部生成事件" --> DB_Events["DB (Events表)"]
+    Collector -- "EventBus 分发" --> Service["Service (处理逻辑)"]
+    Service -- "生成任务" --> DB_Tasks["DB (Tasks表)"]
 ```
 
 **关键点**: 在场景 B 中，**用户不需要运行任何 `life` 命令**。只要 `life serve` 在后台跑着，它就能自动感知世界并作出反应。
