@@ -19,10 +19,10 @@
 *   **命令**: `life serve`
 *   **生命周期**: **常驻**。一直运行，直到被杀死或关机。
 *   **职责**:
-    1.  **轮询事件**: 每隔 N 秒（默认 10s）检查数据库的 `events` 表。
+    1.  **轮询事件**: 每隔 N 秒（默认 5s）检查数据库的 `events` 表。
     2.  **消费事件**: 发现 `processed=False` 的事件，根据类型（如 `task.created`, `file.created`）分发给对应的 Service 处理。
-    3.  **定时任务**: 通过 `APScheduler` 触发定时逻辑（如每日回顾）。
-    4.  **文件监控 (即将实现)**: 挂载 `Watchdog` 线程，实时监听文件系统变动。
+    3.  **定时任务**: 通过 `APScheduler` 触发定时逻辑。
+    4.  **文件监控**: 挂载 `Watchdog` 线程，通过 **Ingestion Pipeline** 实时监听并重整化文件系统变动。
 
 ---
 
@@ -56,21 +56,20 @@ graph TD
 `serve` 命令本质上是启动了一个聚合了多个“监听器”的容器。
 
 ```python
-# 伪代码示意
+# 核心逻辑示意 (详见 scheduler.py)
 def serve():
     # 1. 启动定时器调度器
+    scheduler.add_job(process_events, 'interval', seconds=5)
     scheduler.start()
     
-    # 2. (下一步) 启动文件监控线程
-    # observer.schedule(event_handler, path, recursive=True)
-    # observer.start()
+    # 2. 启动文件监控 (已实现)
+    # 采用 Ingestion Pipeline 架构，实现重整化不动点，防止事件风暴
+    watcher = FileWatcher(os.getcwd())
+    watcher.start()
     
-    # 3. 启动主循环 (事件消费)
+    # 3. 阻塞主线程，保持服务运行
     while True:
-        events = bus.fetch_unprocessed()
-        for event in events:
-            dispatch(event)
-        sleep(5)
+        time.sleep(1)
 ```
 
 ### 如何保证持续运行？

@@ -3,10 +3,16 @@
 这是一个基于"六层架构"设计的个人生活管理系统最小可行性产品 (MVP)。
 目前的版本专注于解决 **"任务有始无终"** 的痛点，通过强制的状态流转和后台自动处理，确保每个任务都有明确的结局。
 
-详细文档：
-- [DEV_GUIDE.md](DEV_GUIDE.md): 开发规范与扩展指南
-- [UI_GUIDE.md](UI_GUIDE.md): UI 设计与交互指南
-- [SYSTEM_MECHANISM.md](SYSTEM_MECHANISM.md): `life` 命令运行原理说明
+## 📖 核心文档
+
+文档已迁移至 `docs/` 目录，分类如下：
+
+- **0xx 架构机制**: [系统运行机制](docs/001_SYSTEM_MECHANISM.md)
+- **1xx 开发规范**: [开发指南](docs/100_DEV_GUIDE.md)
+- **2xx 业务逻辑**: [任务生命周期规范](docs/200_SPEC_TASK_LIFECYCLE.md)
+- **3xx 详细设计**: [Ingestion Pipeline 设计](docs/300_DESIGN_INGESTION_PIPELINE.md)
+- **4xx 用户界面**: [UI 设计指南](docs/400_UI_GUIDE.md)
+- **9xx 决策记录**: [ADR: Pipeline 架构决策](docs/900_ADR_FILE_WATCHER_AND_PIPELINE.md)
 
 ## 快速开始
 
