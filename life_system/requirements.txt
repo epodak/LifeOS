@@ -1,0 +1,8 @@
+sqlalchemy
+pydantic
+typer[all]
+rich
+python-dotenv
+watchdog
+apscheduler
+
